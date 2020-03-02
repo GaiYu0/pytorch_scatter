@@ -74,6 +74,10 @@ struct SharedMemory<double> {
     - only works for power-of-2 arrays
 */
 
+template <class T> inline T max(T lhs, T rhs) {
+  return lhs < rhs ? rhs : lhs;
+}
+
 /* This reduction interleaves which threads are active by using the modulo
    operator.  This operator is very expensive on GPUs, and the interleaved
    inactivity means that no whole warps are active, which is also very
@@ -96,7 +100,8 @@ __global__ void reduce0(T *g_idata, T *g_odata, unsigned int n) {
   for (unsigned int s = 1; s < blockDim.x; s *= 2) {
     // modulo arithmetic is slow!
     if ((tid % (2 * s)) == 0) {
-      sdata[tid] += sdata[tid + s];
+      // sdata[tid] += sdata[tid + s];
+      sdata[tid] = max(sdata[tid], sdata[tid + s]);
     }
 
     cg::sync(cta);
@@ -128,7 +133,8 @@ __global__ void reduce1(T *g_idata, T *g_odata, unsigned int n) {
     int index = 2 * s * tid;
 
     if (index < blockDim.x) {
-      sdata[index] += sdata[index + s];
+      // sdata[index] += sdata[index + s];
+      sdata[index] = max(sdata[index], sdata[index + s]);
     }
 
     cg::sync(cta);
@@ -158,7 +164,8 @@ __global__ void reduce2(T *g_idata, T *g_odata, unsigned int n) {
   // do reduction in shared mem
   for (unsigned int s = blockDim.x / 2; s > 0; s >>= 1) {
     if (tid < s) {
-      sdata[tid] += sdata[tid + s];
+      // sdata[tid] += sdata[tid + s];
+      sdata[tid] = max(sdata[tid], sdata[tid + s]);
     }
 
     cg::sync(cta);
@@ -185,7 +192,8 @@ __global__ void reduce3(T *g_idata, T *g_odata, unsigned int n) {
 
   T mySum = (i < n) ? g_idata[i] : 0;
 
-  if (i + blockDim.x < n) mySum += g_idata[i + blockDim.x];
+  // if (i + blockDim.x < n) mySum += g_idata[i + blockDim.x];
+  if (i + blockDim.x < n) mySum = max(mySum, g_idata[i + blockDim.x]);
 
   sdata[tid] = mySum;
   cg::sync(cta);
@@ -193,7 +201,7 @@ __global__ void reduce3(T *g_idata, T *g_odata, unsigned int n) {
   // do reduction in shared mem
   for (unsigned int s = blockDim.x / 2; s > 0; s >>= 1) {
     if (tid < s) {
-      sdata[tid] = mySum = mySum + sdata[tid + s];
+      sdata[tid] = mySum = max(mySum, sdata[tid + s]);
     }
 
     cg::sync(cta);
@@ -230,7 +238,8 @@ __global__ void reduce4(T *g_idata, T *g_odata, unsigned int n) {
 
   T mySum = (i < n) ? g_idata[i] : 0;
 
-  if (i + blockSize < n) mySum += g_idata[i + blockSize];
+  // if (i + blockSize < n) mySum += g_idata[i + blockSize];
+  if (i + blockSize < n) mySum = max(mySum, g_idata[i + blockSize]);
 
   sdata[tid] = mySum;
   cg::sync(cta);
@@ -238,7 +247,8 @@ __global__ void reduce4(T *g_idata, T *g_odata, unsigned int n) {
   // do reduction in shared mem
   for (unsigned int s = blockDim.x / 2; s > 32; s >>= 1) {
     if (tid < s) {
-      sdata[tid] = mySum = mySum + sdata[tid + s];
+      // sdata[tid] = mySum = mySum + sdata[tid + s];
+      sdata[tid] = mySum = max(mySum, sdata[tid + s]);
     }
 
     cg::sync(cta);
@@ -248,10 +258,12 @@ __global__ void reduce4(T *g_idata, T *g_odata, unsigned int n) {
 
   if (cta.thread_rank() < 32) {
     // Fetch final intermediate sum from 2nd warp
-    if (blockSize >= 64) mySum += sdata[tid + 32];
+    // if (blockSize >= 64) mySum += sdata[tid + 32];
+    if (blockSize >= 64) mySum = max(mySum, sdata[tid + 32]);
     // Reduce final warp using shuffle
     for (int offset = tile32.size() / 2; offset > 0; offset /= 2) {
-      mySum += tile32.shfl_down(mySum, offset);
+      // mySum += tile32.shfl_down(mySum, offset);
+      mySum = max(mySum, tile32.shfl_down(mySum, offset));
     }
   }
 
@@ -284,26 +296,27 @@ __global__ void reduce5(T *g_idata, T *g_odata, unsigned int n) {
 
   T mySum = (i < n) ? g_idata[i] : 0;
 
-  if (i + blockSize < n) mySum += g_idata[i + blockSize];
+  // if (i + blockSize < n) mySum += g_idata[i + blockSize];
+  if (i + blockSize < n) mySum = max(mySum, g_idata[i + blockSize]);
 
   sdata[tid] = mySum;
   cg::sync(cta);
 
   // do reduction in shared mem
   if ((blockSize >= 512) && (tid < 256)) {
-    sdata[tid] = mySum = mySum + sdata[tid + 256];
+    sdata[tid] = mySum = max(mySum, sdata[tid + 256]);
   }
 
   cg::sync(cta);
 
   if ((blockSize >= 256) && (tid < 128)) {
-    sdata[tid] = mySum = mySum + sdata[tid + 128];
+    sdata[tid] = mySum = max(mySum, sdata[tid + 128]);
   }
 
   cg::sync(cta);
 
   if ((blockSize >= 128) && (tid < 64)) {
-    sdata[tid] = mySum = mySum + sdata[tid + 64];
+    sdata[tid] = mySum = max(mySum, sdata[tid + 64]);
   }
 
   cg::sync(cta);
@@ -312,10 +325,11 @@ __global__ void reduce5(T *g_idata, T *g_odata, unsigned int n) {
 
   if (cta.thread_rank() < 32) {
     // Fetch final intermediate sum from 2nd warp
-    if (blockSize >= 64) mySum += sdata[tid + 32];
+    // if (blockSize >= 64) mySum += sdata[tid + 32];
+    if (blockSize >= 64) mySum = max(mySum, sdata[tid + 32]);
     // Reduce final warp using shuffle
     for (int offset = tile32.size() / 2; offset > 0; offset /= 2) {
-      mySum += tile32.shfl_down(mySum, offset);
+      mySum = max(mySum, tile32.shfl_down(mySum, offset));
     }
   }
 
@@ -350,11 +364,13 @@ __global__ void reduce6(T *g_idata, T *g_odata, unsigned int n) {
   // number of active thread blocks (via gridDim).  More blocks will result
   // in a larger gridSize and therefore fewer elements per thread
   while (i < n) {
-    mySum += g_idata[i];
+    // mySum += g_idata[i];
+    mySum = max(mySum, g_idata[i]);
 
     // ensure we don't read out of bounds -- this is optimized away for powerOf2
     // sized arrays
-    if (nIsPow2 || i + blockSize < n) mySum += g_idata[i + blockSize];
+    // if (nIsPow2 || i + blockSize < n) mySum += g_idata[i + blockSize];
+    if (nIsPow2 || i + blockSize < n) mySum = max(mySum, g_idata[i + blockSize]);
 
     i += gridSize;
   }
@@ -365,19 +381,22 @@ __global__ void reduce6(T *g_idata, T *g_odata, unsigned int n) {
 
   // do reduction in shared mem
   if ((blockSize >= 512) && (tid < 256)) {
-    sdata[tid] = mySum = mySum + sdata[tid + 256];
+    // sdata[tid] = mySum = mySum + sdata[tid + 256];
+    sdata[tid] = mySum = max(mySum, sdata[tid + 256]);
   }
 
   cg::sync(cta);
 
   if ((blockSize >= 256) && (tid < 128)) {
-    sdata[tid] = mySum = mySum + sdata[tid + 128];
+    // sdata[tid] = mySum = mySum + sdata[tid + 128];
+    sdata[tid] = mySum = max(mySum, sdata[tid + 128]);
   }
 
   cg::sync(cta);
 
   if ((blockSize >= 128) && (tid < 64)) {
-    sdata[tid] = mySum = mySum + sdata[tid + 64];
+    // sdata[tid] = mySum = mySum + sdata[tid + 64];
+    sdata[tid] = mySum = max(mySum, sdata[tid + 64]);
   }
 
   cg::sync(cta);
@@ -386,10 +405,12 @@ __global__ void reduce6(T *g_idata, T *g_odata, unsigned int n) {
 
   if (cta.thread_rank() < 32) {
     // Fetch final intermediate sum from 2nd warp
-    if (blockSize >= 64) mySum += sdata[tid + 32];
+    // if (blockSize >= 64) mySum += sdata[tid + 32];
+    if (blockSize >= 64) mySum = max(mySum, sdata[tid + 32]);
     // Reduce final warp using shuffle
     for (int offset = tile32.size() / 2; offset > 0; offset /= 2) {
-      mySum += tile32.shfl_down(mySum, offset);
+      // mySum += tile32.shfl_down(mySum, offset);
+      mySum = max(mySum, tile32.shfl_down(mySum, offset));
     }
   }
 
@@ -397,7 +418,10 @@ __global__ void reduce6(T *g_idata, T *g_odata, unsigned int n) {
   if (cta.thread_rank() == 0) g_odata[blockIdx.x] = mySum;
 }
 
-extern "C" bool isPow2(unsigned int x);
+// extern "C" bool isPow2(unsigned int x);
+bool isPow2(unsigned int x) {
+  return false;
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 // Wrapper function for kernel launch
