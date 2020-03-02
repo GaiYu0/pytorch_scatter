@@ -67,16 +67,16 @@ struct SharedMemory<double> {
   }
 };
 
+template <class T> inline T max(T lhs, T rhs) {
+  return lhs < rhs ? rhs : lhs;
+}
+
 /*
     Parallel sum reduction using shared memory
     - takes log(n) steps for n input elements
     - uses n threads
     - only works for power-of-2 arrays
 */
-
-template <class T> inline T max(T lhs, T rhs) {
-  return lhs < rhs ? rhs : lhs;
-}
 
 /* This reduction interleaves which threads are active by using the modulo
    operator.  This operator is very expensive on GPUs, and the interleaved
@@ -621,6 +621,11 @@ void reduce(int size, int threads, int blocks, int whichKernel, T *d_idata,
         }
       } else {
         switch (threads) {
+          case 1024:
+            reduce6<T, 1024, true>
+                <<<dimGrid, dimBlock, smemSize>>>(d_idata, d_odata, size);
+            break;
+
           case 512:
             reduce6<T, 512, false>
                 <<<dimGrid, dimBlock, smemSize>>>(d_idata, d_odata, size);
